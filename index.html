@@ -129,6 +129,7 @@
     constructor(n, wrap=false){ this.setResolution(n, wrap); this.diff=1e-4; this.visc=2e-4; this.dt=0.016; this.vort=15; this.confine=true; this.buoy=0.1; this.advectMac=true; this.gravY=0; this.pretty=true; }
     setResolution(n, wrap){ this.n=n|0; this.wrap=!!wrap; const N=this.n, size=(N+2)*(N+2); this.u=new Float32Array(size); this.v=new Float32Array(size); this.u0=new Float32Array(size); this.v0=new Float32Array(size); this.r=new Float32Array(size); this.g=new Float32Array(size); this.b=new Float32Array(size); this.r0=new Float32Array(size); this.g0=new Float32Array(size); this.b0=new Float32Array(size); this.tmp=new Float32Array(size); this.p=new Float32Array(size); this.div=new Float32Array(size); }
     IX(x,y){ return x + (this.n+2)*y; }
+    addSource(x, s, dt){ for(let i=0;i<x.length;i++) x[i] += dt * s[i]; }
     setBnd(b,x){ const N=this.n; for(let i=1;i<=N;i++){ x[this.IX(0,i)]   = this.wrap? x[this.IX(N,i)]   : (b===1? -x[this.IX(1,i)]  : x[this.IX(1,i)]); x[this.IX(N+1,i)] = this.wrap? x[this.IX(1,i)]   : (b===1? -x[this.IX(N,i)]  : x[this.IX(N,i)]); x[this.IX(i,0)]   = this.wrap? x[this.IX(i,N)]   : (b===2? -x[this.IX(i,1)]  : x[this.IX(i,1)]); x[this.IX(i,N+1)] = this.wrap? x[this.IX(i,1)]   : (b===2? -x[this.IX(i,N)]  : x[this.IX(i,N)]); } x[this.IX(0,0)] = 0.5*(x[this.IX(1,0)] + x[this.IX(0,1)]); x[this.IX(0,N+1)] = 0.5*(x[this.IX(1,N+1)] + x[this.IX(0,N)]); x[this.IX(N+1,0)] = 0.5*(x[this.IX(N,0)] + x[this.IX(N+1,1)]); x[this.IX(N+1,N+1)] = 0.5*(x[this.IX(N,N+1)] + x[this.IX(N+1,N)]); }
     linSolve(b,x,x0,a,c){ const N=this.n, cR=1/c; for(let k=0;k<20;k++){ for(let i=1;i<=N;i++){ for(let j=1;j<=N;j++){ x[this.IX(i,j)] = (x0[this.IX(i,j)] + a*( x[this.IX(i-1,j)] + x[this.IX(i+1,j)] + x[this.IX(i,j-1)] + x[this.IX(i,j+1)] ))*cR; } } this.setBnd(b,x); } }
     diffuse(b,x,x0,diff,dt){ const N=this.n; const a=dt*diff*N*N; this.linSolve(b,x,x0,a,1+4*a); }
@@ -206,6 +207,13 @@
     fluid.advectMac = ui.macc.checked;
     fluid.wrap = ui.wrap.checked;
     fluid.pretty = ui.pretty.checked;
+
+    // Accumulate brush sources into live fields before stepping
+    fluid.addSource(fluid.u, fluid.u0, 1);
+    fluid.addSource(fluid.v, fluid.v0, 1);
+    fluid.addSource(fluid.r, fluid.r0, 1);
+    fluid.addSource(fluid.g, fluid.g0, 1);
+    fluid.addSource(fluid.b, fluid.b0, 1);
 
     if(!paused){ fluid.step(); draw(); }
     fpsCount++; if(now-lastStamp>250){ const fps=(fpsCount*1000/(now-lastStamp))|0; fpsEl.textContent = `${fps} fps`; fpsCount=0; lastStamp=now; }
