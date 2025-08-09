@@ -179,11 +179,11 @@
   // ============================
   // Input (touch + mouse)
   // ============================
-  let dragging=false, lastX=0, lastY=0, lastTime=0, dragStart=0;
+  let dragging=false, lastX=0, lastY=0, lastTime=0, dragStart=0, strokeDx=0, strokeDy=0;
   function canvasPos(e){ const rect=C.getBoundingClientRect(); const t=e.touches? e.touches[0]: e; const x=(t.clientX-rect.left)/rect.width; const y=(t.clientY-rect.top)/rect.height; return {x:Math.min(0.999,Math.max(0.001,x)), y:Math.min(0.999,Math.max(0.001,y))}; }
 
   // Simple safety caps
-  const PER_FRAME_VEL=0.6, PER_FRAME_DYE=0.06, VEL_MAX=3.0, DYE_MAX=1.2, CFL=0.7;
+  const PER_FRAME_VEL=1.2, PER_FRAME_DYE=0.08, VEL_MAX=6.0, DYE_MAX=1.4, CFL=0.9;
   function clampFields(){ const L=fluid.u.length; for(let k=0;k<L;k++){ const ux=fluid.u[k], vy=fluid.v[k], m=Math.hypot(ux,vy); if(m>VEL_MAX){ const s=VEL_MAX/m; fluid.u[k]=ux*s; fluid.v[k]=vy*s; } if(fluid.r[k]>DYE_MAX) fluid.r[k]=DYE_MAX; if(fluid.g[k]>DYE_MAX) fluid.g[k]=DYE_MAX; if(fluid.b[k]>DYE_MAX) fluid.b[k]=DYE_MAX; if(fluid.r[k]<0) fluid.r[k]=0; if(fluid.g[k]<0) fluid.g[k]=0; if(fluid.b[k]<0) fluid.b[k]=0; } }
 
   function addBrush(x,y,vx,vy){ const N=fluid.n; const bs=parseInt(ui.brush.value,10)|0; const f=parseFloat(ui.force.value); const now=performance.now(); const age=Math.max(0, now - dragStart); let att=1/(1+0.003*age); if(Math.hypot(vx,vy)<0.002) att*=0.25; const i=1+(x*N|0), j=1+(y*N|0);
