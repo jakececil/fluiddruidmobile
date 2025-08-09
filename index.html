@@ -94,7 +94,7 @@
   const clamp=(x,a,b)=>x<a?a:(x>b?b:x);
   const q = (s)=>document.querySelector(s);
   const on=(sel,evt,fn)=>document.querySelectorAll(sel).forEach(el=>el.addEventListener(evt,()=>fn(el)));
-  function hsl(h,s,l){ const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2; let r=0,g=0,b=0; if(0<=h&&h<60){r=c;g=x;} else if(60<=h&&h<120){r=x;g=c;} else if(120<=h&&h<180){g=c;b=x;} else if(180<=h&&h<240){g=x;b=c;} else if(240<=h&&h<300){r=x;b=c;} else {r=c;b=x;} return [r+m,g+m,b+m]; }
+  function hsl(h,s,l){ const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2; let r=0,g=0,b=0; if(0<=h&&h<60){r=c;g=x;} else if(60<=h&&h<120){r=x;g=c;} else if(120<=h&&h<180){g=c;b=x;} else if(180<=h&&h<240){g=x;b=c;} else if(240<=h&&h<300){r=x;b=c;} else {r=c;b<x?x:r; b=x;} return [r+m,g+m,b+m]; }
 
   // ============================
   // Canvas & UI
@@ -183,24 +183,65 @@
   function canvasPos(e){ const rect=C.getBoundingClientRect(); const t=e.touches? e.touches[0]: e; const x=(t.clientX-rect.left)/rect.width; const y=(t.clientY-rect.top)/rect.height; return {x:Math.min(0.999,Math.max(0.001,x)), y:Math.min(0.999,Math.max(0.001,y))}; }
 
   // Simple safety caps
-  const PER_FRAME_VEL=1.2, PER_FRAME_DYE=0.08, VEL_MAX=6.0, DYE_MAX=1.4, CFL=0.9;
+  const PER_FRAME_VEL=0.6, PER_FRAME_DYE=0.06, VEL_MAX=3.0, DYE_MAX=1.2, CFL=0.7;
   function clampFields(){ const L=fluid.u.length; for(let k=0;k<L;k++){ const ux=fluid.u[k], vy=fluid.v[k], m=Math.hypot(ux,vy); if(m>VEL_MAX){ const s=VEL_MAX/m; fluid.u[k]=ux*s; fluid.v[k]=vy*s; } if(fluid.r[k]>DYE_MAX) fluid.r[k]=DYE_MAX; if(fluid.g[k]>DYE_MAX) fluid.g[k]=DYE_MAX; if(fluid.b[k]>DYE_MAX) fluid.b[k]=DYE_MAX; if(fluid.r[k]<0) fluid.r[k]=0; if(fluid.g[k]<0) fluid.g[k]=0; if(fluid.b[k]<0) fluid.b[k]=0; } }
 
-  function addBrush(x,y,vx,vy){ const N=fluid.n; const bs=parseInt(ui.brush.value,10)|0; const f=parseFloat(ui.force.value); const now=performance.now(); const age=Math.max(0, now - dragStart); let att=1/(1+0.003*age); if(Math.hypot(vx,vy)<0.002) att*=0.25; const i=1+(x*N|0), j=1+(y*N|0);
-    for(let dy=-bs; dy<=bs; dy++) for(let dx=-bs; dx<=bs; dx++){
-      if(dx*dx+dy*dy>bs*bs) continue; const ii=Math.min(N,Math.max(1,i+dx)), jj=Math.min(N,Math.max(1,j+dy)); const idx=fluid.IX(ii,jj);
-      let du=vx*f*0.0005*att, dv=vy*f*0.0005*att; const mag=Math.hypot(du,dv); if(mag>PER_FRAME_VEL){ const s=PER_FRAME_VEL/mag; du*=s; dv*=s; }
-      fluid.u0[idx]+=du; fluid.v0[idx]+=dv;
-      const H=(now/30 + (ii+jj)*2)%360; const c=hsl(H,0.75,0.5); let rr=c[0]*att, gg=c[1]*att, bb=c[2]*att; const sum=rr+gg+bb; if(sum>PER_FRAME_DYE){ const s=PER_FRAME_DYE/sum; rr*=s; gg*=s; bb*=s; }
-      fluid.r0[idx]+=rr; fluid.g0[idx]+=gg; fluid.b0[idx]+=bb;
+  function addBrush(x,y,vx,vy){
+    const N=fluid.n; const bs=parseInt(ui.brush.value,10)|0; const f=parseFloat(ui.force.value);
+    const now=performance.now(); const age=Math.max(0, now - dragStart);
+    let att=1/(1+0.002*age); // long-press fade
+
+    // Direction: use instantaneous motion; if tiny, use smoothed stroke direction
+    let dirx=0, diry=0; let sp=Math.hypot(vx,vy);
+    if(sp>1e-4){ dirx=vx/sp; diry=vy/sp; } else { const m=Math.hypot(strokeDx,strokeDy); if(m>1e-4){ dirx=strokeDx/m; diry=strokeDy/m; } }
+
+    const i=1+(x*N|0), j=1+(y*N|0);
+    const lead = Math.max(1, Math.round(bs*0.35)); // forward bias distance in cells
+    for(let dy=-bs; dy<=bs; dy++){
+      for(let dx=-bs; dx<=bs; dx++){
+        const r2=dx*dx+dy*dy; if(r2>bs*bs) continue;
+        const ii=Math.min(N,Math.max(1,i+dx));
+        const jj=Math.min(N,Math.max(1,j+dy));
+        const idx=fluid.IX(ii,jj);
+
+        // Directional gain: weight along the stroke direction
+        const rad=Math.sqrt(r2)||1; const align=(dirx*dx + diry*dy)/(rad||1);
+        const fwd = 0.6 + 0.8*Math.max(0, align); // [0.6..1.4]
+        const base = f*0.0008*att;               // impulse scale
+
+        // Inject momentum: component from actual motion + directional kick
+        let du = vx*base*0.75 + dirx*base*1.25*fwd;
+        let dv = vy*base*0.75 + diry*base*1.25*fwd;
+        const mag=Math.hypot(du,dv); if(mag>PER_FRAME_VEL){ const s=PER_FRAME_VEL/mag; du*=s; dv*=s; }
+        fluid.u0[idx]+=du; fluid.v0[idx]+=dv;
+
+        // Dye placement with slight forward projection
+        const li = Math.min(N, Math.max(1, ii + Math.round(dirx*lead*fwd)));
+        const lj = Math.min(N, Math.max(1, jj + Math.round(diry*lead*fwd)));
+        const lidx = fluid.IX(li, lj);
+        const H=(now/28 + (li+lj)*2)%360; const c=hsl(H,0.78,0.55);
+        let rr=c[0]*att*fwd, gg=c[1]*att*fwd, bb=c[2]*att*fwd;
+        let sum=rr+gg+bb; if(sum>PER_FRAME_DYE){ const s=PER_FRAME_DYE/sum; rr*=s; gg*=s; bb*=s; }
+        fluid.r0[lidx]+=rr; fluid.g0[lidx]+=gg; fluid.b0[lidx]+=bb;
+      }
     }
   }
 
-  C.addEventListener('touchstart', e=>{ e.preventDefault(); dragging=true; const p=canvasPos(e); lastX=p.x; lastY=p.y; const now=performance.now(); lastTime=now; dragStart=now; addBrush(p.x,p.y,0,0); }, {passive:false});
-  C.addEventListener('touchmove', e=>{ e.preventDefault(); if(!dragging) return; const p=canvasPos(e); const now=performance.now(); const dt=(now-lastTime+1e-6); const vx=(p.x-lastX)/dt*16; const vy=(p.y-lastY)/dt*16; addBrush(p.x,p.y,vx,vy); lastX=p.x; lastY=p.y; lastTime=now; }, {passive:false});
+  // Touch: start
+  C.addEventListener('touchstart', e=>{ e.preventDefault(); dragging=true; const p=canvasPos(e); lastX=p.x; lastY=p.y; const now=performance.now(); lastTime=now; dragStart=now; strokeDx=0; strokeDy=0; addBrush(p.x,p.y,0,0); }, {passive:false});
+  // Touch: move
+  C.addEventListener('touchmove', e=>{ e.preventDefault(); if(!dragging) return; const p=canvasPos(e); const now=performance.now(); const dt=(now-lastTime+1e-6); const vx=(p.x-lastX)/dt*16; const vy=(p.y-lastY)/dt*16; {
+      const dx=p.x-lastX, dy=p.y-lastY; const sp=Math.hypot(dx,dy); if(sp>1e-4){ const inv=1/sp; const dirx=dx*inv, diry=dy*inv; strokeDx = strokeDx*0.65 + dirx*0.35; strokeDy = strokeDy*0.65 + diry*0.35; }
+    }
+    addBrush(p.x,p.y,vx,vy); lastX=p.x; lastY=p.y; lastTime=now; }, {passive:false});
   C.addEventListener('touchend', ()=>{ dragging=false; }, {passive:false});
-  C.addEventListener('pointerdown', e=>{ if(e.pointerType==='mouse'){ dragging=true; const p=canvasPos(e); lastX=p.x; lastY=p.y; const now=performance.now(); lastTime=now; dragStart=now; addBrush(p.x,p.y,0,0);} });
-  C.addEventListener('pointermove', e=>{ if(!dragging||e.pointerType!=='mouse') return; const p=canvasPos(e); const now=performance.now(); const dt=(now-lastTime+1e-6); const vx=(p.x-lastX)/dt*16; const vy=(p.y-lastY)/dt*16; addBrush(p.x,p.y,vx,vy); lastX=p.x; lastY=p.y; lastTime=now; });
+
+  // Pointer (mouse/trackpad)
+  C.addEventListener('pointerdown', e=>{ if(e.pointerType==='mouse'){ dragging=true; const p=canvasPos(e); lastX=p.x; lastY=p.y; const now=performance.now(); lastTime=now; dragStart=now; strokeDx=0; strokeDy=0; addBrush(p.x,p.y,0,0);} });
+  C.addEventListener('pointermove', e=>{ if(!dragging||e.pointerType!=='mouse') return; const p=canvasPos(e); const now=performance.now(); const dt=(now-lastTime+1e-6); const vx=(p.x-lastX)/dt*16; const vy=(p.y-lastY)/dt*16; {
+      const dx=p.x-lastX, dy=p.y-lastY; const sp=Math.hypot(dx,dy); if(sp>1e-4){ const inv=1/sp; const dirx=dx*inv, diry=dy*inv; strokeDx = strokeDx*0.65 + dirx*0.35; strokeDy = strokeDy*0.65 + diry*0.35; }
+    }
+    addBrush(p.x,p.y,vx,vy); lastX=p.x; lastY=p.y; lastTime=now; });
   window.addEventListener('pointerup', ()=>{ dragging=false; });
 
   // ============================
@@ -226,9 +267,12 @@
     ok('Advect zero-vel stable',(()=>{ const f=new Fluid(8); for(let j=1;j<=8;j++) for(let i=1;i<=8;i++) f.r0[f.IX(i,j)]=i+j; f.advect(0,f.r,f.r0,f.u,f.v,0.016); return Math.abs(f.r[f.IX(4,4)]-f.r0[f.IX(4,4)])<1e-3; })());
     ok('Projection reduces div',(()=>{ const f=new Fluid(8); for(let j=1;j<=8;j++) for(let i=1;i<=8;i++){ f.u[f.IX(i,j)]=(i%3)-1; f.v[f.IX(i,j)]=(j%2)-0.5; } let before=0,after=0; for(let j=1;j<=8;j++) for(let i=1;i<=8;i++) before+=Math.abs((f.u[f.IX(i+1,j)]-f.u[f.IX(i-1,j)] + f.v[f.IX(i,j+1)]-f.v[f.IX(i,j-1)])/(2*8)); f.project(f.u,f.v,f.p,f.div); for(let j=1;j<=8;j++) for(let i=1;i<=8;i++) after+=Math.abs((f.u[f.IX(i+1,j)]-f.u[f.IX(i-1,j)] + f.v[f.IX(i,j+1)]-f.v[f.IX(i,j-1)])/(2*8)); return after<before; })());
     ok('Step finite',(()=>{ const f=new Fluid(16); f.r.fill(0.1); f.g.fill(0.2); f.b.fill(0.3); f.step(); for(let k=0;k<f.r.length;k++) if(!isFinite(f.r[k]+f.g[k]+f.b[k])) return false; return true; })());
-    // Extra tests
+    // Extra tests (added)
     ok('MacCormack ~ Semi-Lag at zero velocity',(()=>{ const f=new Fluid(10); f.advectMac=true; const src=new Float32Array((12)*(12)); for(let j=1;j<=10;j++) for(let i=1;i<=10;i++) src[f.IX(i,j)]=Math.sin(i*0.3)+Math.cos(j*0.2); f.r0.set(src); f.advectMacCormack(0,f.r,f.r0,f.u,f.v,0.02); const a=f.r[f.IX(5,5)]; f.r.fill(0); f.advect(0,f.r,src,f.u,f.v,0.02); const b=f.r[f.IX(5,5)]; return Math.abs(a-b)<1e-5; })());
     ok('Wrap edges copies across boundary',(()=>{ const f=new Fluid(8); f.wrap=true; f.r[f.IX(1,4)]=1; f.setBnd(0,f.r); return f.r[f.IX(9,4)]===1; })());
+    ok('Brush injects momentum',(()=>{ const wasU0 = fluid.u0.slice(); const wasR0 = fluid.r0.slice(); const sum=(arr)=>{ let s=0; for(let i=0;i<arr.length;i++) s+=arr[i]; return s; }; const u0a=sum(fluid.u0), r0a=sum(fluid.r0); const now=performance.now(); dragStart=now; strokeDx=1; strokeDy=0; addBrush(0.5,0.5,0.02,0.0); const u0b=sum(fluid.u0), r0b=sum(fluid.r0); // restore
+      fluid.u0.set(wasU0); fluid.r0.set(wasR0); return u0b>u0a && r0b>r0a; })());
+    ok('Clamp caps velocity',(()=>{ const idx=fluid.IX(5,5); const oldU=fluid.u[idx], oldV=fluid.v[idx]; fluid.u[idx]=999; fluid.v[idx]=999; clampFields(); const capped=Math.hypot(fluid.u[idx],fluid.v[idx])<=VEL_MAX+1e-6; fluid.u[idx]=oldU; fluid.v[idx]=oldV; return capped; })());
 
     const passed = results.every(r=>r[1]); statusEl.textContent=passed?'Diagnostics: PASS':'Diagnostics: FAIL'; statusEl.className='status '+(passed?'ok':'err'); console.table(results.map(([name,ok])=>({test:name,ok}))); return passed; }
   ui.diag.addEventListener('click', runDiagnostics);
